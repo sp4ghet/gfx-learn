@@ -41,27 +41,9 @@ use gfx_backend_vulkan as back;
 
 pub const WINDOW_NAME: &str = "Hello Vulkan";
 
-pub const VERTEX_SOURCE: &str = "
-#version 450
-layout (location = 0) in vec2 position;
+pub const VERTEX_SOURCE: &str = include_str!("./tri.vert");
 
-out gl_PerVertex {
-    vec4 gl_Position;
-};
-
-void main(){
-    gl_Position = vec4(position, 0.0, 1.0);
-}
-";
-
-pub const FRAGMENT_SOURCE: &str = "
-#version 450
-layout(location = 0) out vec4 color;
-
-void main(){
-    color = vec4(1.0);
-}
-";
+pub const FRAGMENT_SOURCE: &str = include_str!("./tri.frag");
 
 #[derive(Debug)]
 pub struct WinitState {
@@ -483,6 +465,7 @@ impl HalState {
                 error!("{}", e);
                 "Couldn't compile fragment shader"
             })?;
+
         let vertex_shader_module = unsafe {
             device
                 .create_shader_module(vertex_compile_artifact.as_binary_u8())
@@ -890,10 +873,8 @@ impl LocalState {
 }
 
 pub fn do_the_render(hal: &mut HalState, locals: &LocalState) -> Result<(), &'static str> {
-    let x = ((locals.mouse_x / locals.frame_width) * 2.0) - 1.0;
-    let y = ((locals.mouse_y / locals.frame_height) * 2.0) - 1.0;
     let triangle = Triangle {
-        points: [[-0.5, 0.5], [-0.5, -0.5], [x as f32, y as f32]],
+        points: [[-1.0, 1.0], [1.0, 1.0], [0.0, -1.0]],
     };
 
     hal.draw_triangle_frame(triangle)
