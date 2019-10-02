@@ -16,10 +16,10 @@ use gfx_hal::{
     pool::{CommandPool, CommandPoolCreateFlags},
     pso::{
         AttributeDesc, BakedStates, BasePipeline, BlendDesc, BlendOp, BlendState, ColorBlendDesc,
-        ColorMask, DepthStencilDesc, DepthTest, DescriptorSetLayoutBinding, Element, EntryPoint,
-        Face, Factor, FrontFace, GraphicsPipelineDesc, GraphicsShaderSet, InputAssemblerDesc,
-        LogicOp, PipelineCreationFlags, PipelineStage, PolygonMode, Rasterizer, Rect,
-        ShaderStageFlags, Specialization, StencilTest, VertexBufferDesc, Viewport,
+        ColorMask, DepthStencilDesc, DepthTest, DescriptorSetLayoutBinding, ElemOffset, ElemStride,
+        Element, EntryPoint, Face, Factor, FrontFace, GraphicsPipelineDesc, GraphicsShaderSet,
+        InputAssemblerDesc, LogicOp, PipelineCreationFlags, PipelineStage, PolygonMode, Rasterizer,
+        Rect, ShaderStageFlags, Specialization, StencilTest, VertexBufferDesc, Viewport,
     },
     queue::{family::QueueGroup, QueueType, Submission},
     window::{Backbuffer, Extent2D, FrameSync, PresentMode, Swapchain, SwapchainConfig},
@@ -508,17 +508,27 @@ impl HalState {
 
             let vertex_buffers: Vec<VertexBufferDesc> = vec![VertexBufferDesc {
                 binding: 0,
-                stride: (size_of::<f32>() * 2) as u32,
+                stride: (size_of::<f32>() * 5) as ElemStride,
                 rate: 0,
             }];
-            let attributes: Vec<AttributeDesc> = vec![AttributeDesc {
+            let position_attribute = AttributeDesc {
                 location: 0,
                 binding: 0,
                 element: Element {
                     format: Format::Rg32Float,
                     offset: 0,
                 },
-            }];
+            };
+            let color_attribute = AttributeDesc {
+                location: 1,
+                binding: 0,
+                element: Element {
+                    format: Format::Rgb32Float,
+                    offset: (size_of::<f32>() * 2) as ElemOffset,
+                },
+            };
+
+            let attributes: Vec<AttributeDesc> = vec![position_attribute, color_attribute];
 
             let rasterizer = Rasterizer {
                 depth_clamping: false,
@@ -702,7 +712,7 @@ impl HalState {
                 .device
                 .acquire_mapping_writer(&self.memory, 0..self.requirements.size)
                 .map_err(|_| "Failed to acquire mapping writer")?;
-            let points = triangle.points_flat();
+            let points = triangle.vertex_attributes();
             data_target[..points.len()].copy_from_slice(&points);
             self.device
                 .release_mapping_writer(data_target)
@@ -847,6 +857,15 @@ impl Triangle {
     pub fn points_flat(self) -> [f32; 6] {
         let [[a, b], [c, d], [e, f]] = self.points;
         [a, b, c, d, e, f]
+    }
+
+    pub fn vertex_attributes(self) -> [f32; 3 * (2 + 3)] {
+        let [[a, b], [c, d], [e, f]] = self.points;
+        [
+            a, b, 1.0, 0.0, 0.0, //r
+            c, d, 0.0, 1.0, 0.0, //g
+            e, f, 0.0, 0.0, 1.0, //b
+        ]
     }
 }
 
