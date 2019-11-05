@@ -39,6 +39,9 @@ use gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
 use gfx_backend_vulkan as back;
 
+mod primitives;
+use primitives::Triangle;
+
 pub const WINDOW_NAME: &str = "Hello Vulkan";
 
 pub const VERTEX_SOURCE: &str = include_str!("./tri.vert");
@@ -845,27 +848,6 @@ impl UserInput {
             _ => (),
         });
         output
-    }
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct Triangle {
-    pub points: [[f32; 2]; 3],
-}
-
-impl Triangle {
-    pub fn points_flat(self) -> [f32; 6] {
-        let [[a, b], [c, d], [e, f]] = self.points;
-        [a, b, c, d, e, f]
-    }
-
-    pub fn vertex_attributes(self) -> [f32; 3 * (2 + 3)] {
-        let [[a, b], [c, d], [e, f]] = self.points;
-        [
-            a, b, 1.0, 0.0, 0.0, //r
-            c, d, 0.0, 1.0, 0.0, //g
-            e, f, 0.0, 0.0, 1.0, //b
-        ]
     }
 }
 
