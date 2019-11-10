@@ -3,6 +3,7 @@ pub struct Triangle {
     pub points: [[f32; 2]; 3],
 }
 
+#[allow(clippy::many_single_char_names)]
 impl Triangle {
     pub fn points_flat(self) -> [f32; 6] {
         let [[a, b], [c, d], [e, f]] = self.points;
@@ -28,12 +29,14 @@ pub struct Quad {
 }
 
 impl Quad {
+    #[allow(clippy::many_single_char_names)]
     pub fn vertex_attributes(self) -> [f32; 4 * (2 + 3 + 2)] {
         let x = self.x;
         let y = self.y;
         let w = self.w;
         let h = self.h;
 
+        // #[rustfmt::skip] once it's no longer experimental for expressions
         #[cfg_attr(rustfmt, rustfmt_skip)]
         [
             // X Y R G B U V

@@ -19,15 +19,16 @@ winit = "0.18"
 gfx-hal = "0.1"
 arrayvec = "0.4"
 shaderc = "0.3.12"
+image = "0.21"
 
 [dependencies.gfx-backend-vulkan]
 version = "0.1"
 optional = true
 
-[target.'cfg.(target_os = "macos")'.dependencies.gfx-backend-metal]
+[target.'cfg(target_os = "macos")'.dependencies.gfx-backend-metal]
 version = "0.1"
 optional = true
 
-[target.'cfg.(windows)'.dependencies.gfx-backend-dx12]
+[target.'cfg(windows)'.dependencies.gfx-backend-dx12]
 version = "0.1"
 optional = true
