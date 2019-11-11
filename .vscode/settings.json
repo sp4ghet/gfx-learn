@@ -1,5 +1,6 @@
 {
     "rust.features": [
         "vulkan"
-    ]
+    ],
+    "glsllint.glslangValidatorArgs": "--target-env vulkan1.1"
 }
