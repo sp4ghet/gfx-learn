@@ -18,7 +18,7 @@ use core::{
 };
 
 use crate::primitives::Quad;
-use crate::{FRAGMENT_SOURCE, VERTEX_SOURCE, WINDOW_NAME};
+use crate::{CREATURE_BYTES, FRAGMENT_SOURCE, VERTEX_SOURCE, WINDOW_NAME};
 use winit::Window;
 
 use gfx_hal::{
@@ -44,10 +44,13 @@ use gfx_hal::{
         CommandQueue, QueueType, Submission,
     },
     window::{Backbuffer, Extent2D, FrameSync, PresentMode, Swapchain, SwapchainConfig},
-    Backend, Gpu, Graphics, IndexType, Instance, Primitive, QueueFamily, Surface,
+    Backend, DescriptorPool, Gpu, Graphics, IndexType, Instance, Primitive, QueueFamily, Surface,
 };
 
+use std::time::Instant;
+
 pub struct HalState {
+    creation_instant: Instant,
     current_frame: usize,
     frames_in_flight: usize,
     in_flight_fences: Vec<<back::Backend as Backend>::Fence>,
@@ -64,7 +67,10 @@ pub struct HalState {
     queue_group: QueueGroup<back::Backend, Graphics>,
     vertices: BufferBundle<back::Backend, back::Device>,
     indices: BufferBundle<back::Backend, back::Device>,
+    texture: LoadedImage<back::Backend, back::Device>,
     descriptor_set_layouts: Vec<<back::Backend as Backend>::DescriptorSetLayout>,
+    descriptor_set: ManuallyDrop<<back::Backend as Backend>::DescriptorSet>,
+    descriptor_pool: ManuallyDrop<<back::Backend as Backend>::DescriptorPool>,
     graphics_pipeline: ManuallyDrop<<back::Backend as Backend>::GraphicsPipeline>,
     pipeline_layout: ManuallyDrop<<back::Backend as Backend>::PipelineLayout>,
     _adapter: Adapter<back::Backend>,
@@ -96,7 +102,7 @@ impl HalState {
                 .collect::<Vec<QueueType>>()
         );
 
-        let (mut device, queue_group): (back::Device, QueueGroup<back::Backend, Graphics>) = {
+        let (mut device, mut queue_group): (back::Device, QueueGroup<back::Backend, Graphics>) = {
             let queue_family = adapter
                 .queue_families
                 .iter()
@@ -337,8 +343,13 @@ impl HalState {
             .map(|_| command_pool.acquire_command_buffer())
             .collect();
 
-        let (descriptor_set_layouts, pipeline_layout, graphics_pipeline) =
-            Self::create_pipeline(&mut device, extent, &render_pass)?;
+        let (
+            descriptor_set_layouts,
+            descriptor_pool,
+            descriptor_set,
+            pipeline_layout,
+            graphics_pipeline,
+        ) = Self::create_pipeline(&mut device, extent, &render_pass)?;
 
         const F32_XY_RGB_UV_QUAD: usize = size_of::<f32>() * (2 + 3 + 2) * 4;
         let vertices =
@@ -360,10 +371,41 @@ impl HalState {
                 .map_err(|_| "Couldn't release the index buffer mapping writer")?;
         }
 
+        let texture = LoadedImage::new(
+            &adapter,
+            &device,
+            &mut command_pool,
+            &mut queue_group.queues[0],
+            image::load_from_memory(CREATURE_BYTES)
+                .expect("binary corrupted")
+                .to_rgba(),
+        )?;
+
+        unsafe {
+            device.write_descriptor_sets(vec![
+                gfx_hal::pso::DescriptorSetWrite {
+                    set: &descriptor_set,
+                    binding: 0,
+                    array_offset: 0,
+                    descriptors: Some(gfx_hal::pso::Descriptor::Image(
+                        texture.image_view.deref(),
+                        Layout::ShaderReadOnlyOptimal,
+                    )),
+                },
+                gfx_hal::pso::DescriptorSetWrite {
+                    set: &descriptor_set,
+                    binding: 1,
+                    array_offset: 0,
+                    descriptors: Some(gfx_hal::pso::Descriptor::Sampler(texture.sampler.deref())),
+                },
+            ]);
+        }
+
         Ok(Self {
             _instance: ManuallyDrop::new(instance),
             _surface: surface,
             _adapter: adapter,
+            creation_instant: Instant::now(),
             device: ManuallyDrop::new(device),
             queue_group,
             swapchain: ManuallyDrop::new(swapchain),
@@ -379,10 +421,13 @@ impl HalState {
             in_flight_fences,
             current_frame: 0,
             descriptor_set_layouts,
+            descriptor_set: ManuallyDrop::new(descriptor_set),
+            descriptor_pool: ManuallyDrop::new(descriptor_pool),
             pipeline_layout: ManuallyDrop::new(pipeline_layout),
             graphics_pipeline: ManuallyDrop::new(graphics_pipeline),
             vertices,
             indices,
+            texture,
         })
     }
 
@@ -394,6 +439,8 @@ impl HalState {
     ) -> Result<
         (
             Vec<<back::Backend as Backend>::DescriptorSetLayout>,
+            <back::Backend as Backend>::DescriptorPool,
+            <back::Backend as Backend>::DescriptorSet,
             <back::Backend as Backend>::PipelineLayout,
             <back::Backend as Backend>::GraphicsPipeline,
         ),
@@ -435,7 +482,7 @@ impl HalState {
                 .create_shader_module(fragment_compile_artifact.as_binary_u8())
                 .map_err(|_| "Couldn't create fragment module from SPIRV")
         }?;
-        let (descriptor_set_layouts, pipeline_layout, gfx_pipeline) = {
+        let (descriptor_set_layouts, descriptor_pool, descriptor_set, layout, gfx_pipeline) = {
             let (vs_entry, fs_entry) = (
                 EntryPoint {
                     entry: "main",
@@ -540,15 +587,56 @@ impl HalState {
                 depth_bounds: None,
             };
 
-            let bindings = Vec::<DescriptorSetLayoutBinding>::new();
-            let immutable_samplers = Vec::<<back::Backend as Backend>::Sampler>::new();
             let descriptor_set_layouts: Vec<<back::Backend as Backend>::DescriptorSetLayout> =
                 vec![unsafe {
                     device
-                        .create_descriptor_set_layout(bindings, immutable_samplers)
+                        .create_descriptor_set_layout(
+                            &[
+                                DescriptorSetLayoutBinding {
+                                    binding: 0,
+                                    ty: gfx_hal::pso::DescriptorType::SampledImage,
+                                    count: 1,
+                                    stage_flags: ShaderStageFlags::FRAGMENT,
+                                    immutable_samplers: false,
+                                },
+                                DescriptorSetLayoutBinding {
+                                    binding: 1,
+                                    ty: gfx_hal::pso::DescriptorType::Sampler,
+                                    count: 1,
+                                    stage_flags: ShaderStageFlags::FRAGMENT,
+                                    immutable_samplers: false,
+                                },
+                            ],
+                            &[],
+                        )
                         .map_err(|_| "Couldn't make a DescriptorSetLayout")?
                 }];
-            let push_constants = Vec::<(ShaderStageFlags, core::ops::Range<u32>)>::new();
+
+            let mut descriptor_pool = unsafe {
+                device
+                    .create_descriptor_pool(
+                        1, // sets
+                        &[
+                            gfx_hal::pso::DescriptorRangeDesc {
+                                ty: gfx_hal::pso::DescriptorType::SampledImage,
+                                count: 1,
+                            },
+                            gfx_hal::pso::DescriptorRangeDesc {
+                                ty: gfx_hal::pso::DescriptorType::Sampler,
+                                count: 1,
+                            },
+                        ],
+                    )
+                    .map_err(|_| "Couldn't create a descriptor pool")?
+            };
+
+            let descriptor_set = unsafe {
+                descriptor_pool
+                    .allocate_set(&descriptor_set_layouts[0])
+                    .map_err(|_| "Couldn't create descriptor set")?
+            };
+
+            let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..1)];
             let layout = unsafe {
                 device
                     .create_pipeline_layout(&descriptor_set_layouts, push_constants)
@@ -580,7 +668,13 @@ impl HalState {
                         .map_err(|_| "Couldn't create a graphics pipline")?
                 }
             };
-            (descriptor_set_layouts, layout, gfx_pipeline)
+            (
+                descriptor_set_layouts,
+                descriptor_pool,
+                descriptor_set,
+                layout,
+                gfx_pipeline,
+            )
         };
 
         // destroy shader modules
@@ -589,7 +683,13 @@ impl HalState {
             device.destroy_shader_module(fragment_shader_module);
         }
 
-        Ok((descriptor_set_layouts, pipeline_layout, gfx_pipeline))
+        Ok((
+            descriptor_set_layouts,
+            descriptor_pool,
+            descriptor_set,
+            layout,
+            gfx_pipeline,
+        ))
     }
 
     pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &'static str> {
@@ -687,6 +787,9 @@ impl HalState {
                 .map_err(|_| "Failed to release mapping writer")?;
         }
 
+        let duration = Instant::now().duration_since(self.creation_instant);
+        let time_f32 = duration.as_secs() as f32 + duration.subsec_nanos() as f32 * 1e-9;
+
         // Record Commands to put into command buffer
         unsafe {
             let buffer = &mut self.command_buffers[i_usize];
@@ -708,6 +811,18 @@ impl HalState {
                     offset: 0,
                     index_type: IndexType::U16,
                 });
+                encoder.bind_graphics_descriptor_sets(
+                    &self.pipeline_layout,
+                    0,
+                    Some(self.descriptor_set.deref()),
+                    &[],
+                );
+                encoder.push_graphics_constants(
+                    &self.pipeline_layout,
+                    ShaderStageFlags::FRAGMENT,
+                    0,
+                    &[time_f32.to_bits()],
+                );
                 encoder.draw_indexed(0..6, 0, 0..1);
             }
             buffer.finish();
@@ -762,11 +877,14 @@ impl core::ops::Drop for HalState {
             // pretty memory unsafe
             self.vertices.manually_drop(self.device.deref());
             self.indices.manually_drop(self.device.deref());
+            self.texture.manually_drop(self.device.deref());
             use core::ptr::read;
             self.device
-                .destroy_graphics_pipeline(ManuallyDrop::into_inner(read(&self.graphics_pipeline)));
+                .destroy_descriptor_pool(ManuallyDrop::into_inner(read(&self.descriptor_pool)));
             self.device
                 .destroy_pipeline_layout(ManuallyDrop::into_inner(read(&self.pipeline_layout)));
+            self.device
+                .destroy_graphics_pipeline(ManuallyDrop::into_inner(read(&self.graphics_pipeline)));
 
             self.device.destroy_command_pool(
                 ManuallyDrop::into_inner(read(&self.command_pool)).into_raw(),

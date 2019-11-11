@@ -7,14 +7,14 @@ mod winit_state;
 use log::{debug, error, info, trace, warn};
 
 use hal_state::HalState;
-use primitives::Triangle;
+use primitives::Quad;
 use user_input::UserInput;
 use winit_state::WinitState;
 
 pub const WINDOW_NAME: &str = "Hello Vulkan";
 pub const VERTEX_SOURCE: &str = include_str!("./tri.vert");
-
 pub const FRAGMENT_SOURCE: &str = include_str!("./tri.frag");
+pub static CREATURE_BYTES: &[u8] = include_bytes!("./creature.png");
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocalState {
@@ -39,11 +39,17 @@ impl LocalState {
 }
 
 pub fn do_the_render(hal: &mut HalState, locals: &LocalState) -> Result<(), &'static str> {
-    let triangle = Triangle {
-        points: [[-1.0, 1.0], [1.0, 1.0], [0.0, -1.0]],
+    let x1 = 100.0;
+    let y1 = 100.0;
+    let x2 = locals.mouse_x as f32;
+    let y2 = locals.mouse_y as f32;
+    let quad = Quad {
+        x: (x1 / locals.frame_width as f32) * 2.0 - 1.0,
+        y: (y1 / locals.frame_height as f32) * 2.0 - 1.0,
+        w: ((x2 - x1) / locals.frame_width as f32) * 2.0,
+        h: ((y2 - y1) / locals.frame_height as f32) * 2.0,
     };
-
-    hal.draw_triangle_frame(triangle)
+    hal.draw_quad_frame(quad)
 }
 
 fn main() {
