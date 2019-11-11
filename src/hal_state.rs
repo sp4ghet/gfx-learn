@@ -794,7 +794,7 @@ impl HalState {
         unsafe {
             let buffer = &mut self.command_buffers[i_usize];
             const QUAD_CLEAR: [ClearValue; 1] =
-                [ClearValue::Color(ClearColor::Float([0.1, 0.1, 0.1, 0.8]))];
+                [ClearValue::Color(ClearColor::Float([0.3, 0.3, 0.3, 0.8]))];
             buffer.begin(false);
             {
                 let mut encoder = buffer.begin_render_pass_inline(
