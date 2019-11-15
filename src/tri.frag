@@ -2,6 +2,7 @@
 // push constants
 layout (push_constant) uniform PushConsts {
   float time;
+  float aspect_ratio;
 } push;
 
 // uniforms
@@ -37,22 +38,23 @@ vec3 rotate(vec3 p, float angle, vec3 axis)
 }
 
 float map(vec3 p){
-  vec3 w = rotate(p, push.time, vec3(1., 0., 0.));
+  vec3 w = p;
   float m = dot(w,w);
 
   vec4 trap = vec4(abs(w),m);
-	float dz = 1.0;
+	float dz = 1.;
     
     
 	for( int i=0; i<4; i++ )
   {
-    dz = 8.0*pow(sqrt(m),7.0)*dz + 1.0;
-		//dz = 8.0*pow(m,3.5)*dz + 1.0;
+    float power = 3. + 5. * abs(cos(push.time / 4.));
+    dz = power*pow(sqrt(m),power-1.)*dz + 1.0;
+		// dz = 8.0*pow(m,3.5)*dz + 1.0;
     
     float r = length(w);
-    float b = 8.0*acos( w.y/r);
-    float a = 8.0*atan( w.x, w.z );
-    w = p + pow(r,8.0) * vec3( sin(b)*sin(a), cos(b), sin(b)*cos(a) );
+    float b = power*acos( w.y/r) + push.time * 2.;
+    float a = power*atan( w.x, w.z ) - push.time * 3.;
+    w = p + pow(r,power) * vec3( sin(b)*sin(a), cos(b), sin(b)*cos(a) );
     trap = min( trap, vec4(abs(w),m) );
 
     m = dot(w,w);
@@ -68,11 +70,14 @@ void main(){
     // vec4 tex_color = texture(sampler2D(tex, samp), frag_uv);
 
     vec2 uv = vec2(frag_uv.x, 1. - frag_uv.y);
+
     uv = (uv*2.) - 1.;
+    uv.x *= push.aspect_ratio;
     vec4 c = vec4(uv, 0.75, 1.0);
 
-    vec3 ro = vec3(0., 0., -3);
+    vec3 ro = vec3(0. , 0., cos(0)) * 2.;
     vec3 rd = vec3(uv, (1.-dot(uv,uv)));
+    rd = rotate(rd, 3.14159265, vec3(1., 0., 0.));
 
     // t is total distance
     // d is step distance

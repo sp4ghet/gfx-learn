@@ -47,7 +47,10 @@ pub fn do_the_render(hal: &mut HalState, locals: &LocalState) -> Result<(), &'st
         w: 2.0,
         h: 2.0,
     };
-    hal.draw_quad_frame(quad)
+
+    let aspect_ratio = locals.frame_width / locals.frame_height;
+
+    hal.draw_quad_frame(quad, aspect_ratio)
 }
 
 fn main() {

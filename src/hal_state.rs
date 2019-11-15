@@ -636,7 +636,7 @@ impl HalState {
                     .map_err(|_| "Couldn't create descriptor set")?
             };
 
-            let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..1)];
+            let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..2)];
             let layout = unsafe {
                 device
                     .create_pipeline_layout(&descriptor_set_layouts, push_constants)
@@ -751,7 +751,7 @@ impl HalState {
         }
     }
 
-    pub fn draw_quad_frame(&mut self, quad: Quad) -> Result<(), &'static str> {
+    pub fn draw_quad_frame(&mut self, quad: Quad, aspect_ratio: f64) -> Result<(), &'static str> {
         let image_available = &self.image_available_semaphores[self.current_frame];
         let render_finished = &self.render_finished_semaphores[self.current_frame];
 
@@ -821,7 +821,7 @@ impl HalState {
                     &self.pipeline_layout,
                     ShaderStageFlags::FRAGMENT,
                     0,
-                    &[time_f32.to_bits()],
+                    &[time_f32.to_bits(), (aspect_ratio as f32).to_bits()],
                 );
                 encoder.draw_indexed(0..6, 0, 0..1);
             }
