@@ -1,3 +1,83 @@
+use gfx_hal::{
+    pso::{AttributeDesc, Element, ElemOffset},
+    format::Format
+};
+use core::mem::size_of;
+
+#[cfg_attr(rustfmt, rustfmt_skip)]
+pub const CUBE_VERTEXES: [Vertex; 24] = [
+  // Face 1 (front)
+  Vertex { xyz: [0.0, 0.0, 0.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [0.0, 1.0, 0.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [1.0, 0.0, 0.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [1.0, 1.0, 0.0], uv: [1.0, 0.0] }, /* top right */
+  // Face 2 (top)
+  Vertex { xyz: [0.0, 1.0, 0.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [0.0, 1.0, 1.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [1.0, 1.0, 0.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [1.0, 1.0, 1.0], uv: [1.0, 0.0] }, /* top right */
+  // Face 3 (back)
+  Vertex { xyz: [0.0, 0.0, 1.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [0.0, 1.0, 1.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [1.0, 0.0, 1.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [1.0, 1.0, 1.0], uv: [1.0, 0.0] }, /* top right */
+  // Face 4 (bottom)
+  Vertex { xyz: [0.0, 0.0, 0.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [0.0, 0.0, 1.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [1.0, 0.0, 0.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [1.0, 0.0, 1.0], uv: [1.0, 0.0] }, /* top right */
+  // Face 5 (left)
+  Vertex { xyz: [0.0, 0.0, 1.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [0.0, 1.0, 1.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [0.0, 0.0, 0.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [0.0, 1.0, 0.0], uv: [1.0, 0.0] }, /* top right */
+  // Face 6 (right)
+  Vertex { xyz: [1.0, 0.0, 0.0], uv: [0.0, 1.0] }, /* bottom left */
+  Vertex { xyz: [1.0, 1.0, 0.0], uv: [0.0, 0.0] }, /* top left */
+  Vertex { xyz: [1.0, 0.0, 1.0], uv: [1.0, 1.0] }, /* bottom right */
+  Vertex { xyz: [1.0, 1.0, 1.0], uv: [1.0, 0.0] }, /* top right */
+];
+
+#[cfg_attr(rustfmt, rustfmt_skip)]
+pub const CUBE_INDEXES: [u16; 36] = [
+     0,  1,  2,  2,  1,  3,
+     4,  5,  6,  7,  6,  5,
+    10,  9,  8,  9, 10, 11,
+    12, 14, 13, 15, 13, 14,
+    16, 17, 18, 19, 18, 17,
+    20, 21, 22, 23, 22, 21
+];
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C)]
+pub struct Vertex{
+    pub xyz: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+impl Vertex{
+    pub fn attributes() -> Vec<AttributeDesc> {
+        let position_attribute = AttributeDesc{
+            location: 0,
+            binding: 0,
+            element: Element{
+                format: Format::Rgb32Float,
+                offset: 0,
+            }
+        };
+    
+        let uv_attribute = AttributeDesc{
+            location: 1,
+            binding: 0,
+            element: Element{
+                format: Format::Rg32Float,
+                offset: size_of::<[f32; 3]>() as ElemOffset,
+            }
+        };
+        vec![position_attribute, uv_attribute]
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct Triangle {
     pub points: [[f32; 2]; 3],

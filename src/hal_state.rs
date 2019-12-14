@@ -1,3 +1,5 @@
+use arrayvec::ArrayVec;
+
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 
@@ -10,15 +12,16 @@ use gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
 use gfx_backend_vulkan as back;
 
-use arrayvec::ArrayVec;
 use core::{
     marker::PhantomData,
-    mem::{size_of, ManuallyDrop},
+    mem::{size_of, size_of_val, ManuallyDrop},
     ops::Deref,
 };
 
-use crate::primitives::Quad;
-use crate::{CREATURE_BYTES, FRAGMENT_SOURCE, VERTEX_SOURCE, WINDOW_NAME};
+use crate::{
+    primitives::{Vertex, CUBE_INDEXES, CUBE_VERTEXES},
+    CREATURE_BYTES, FRAGMENT_SOURCE, VERTEX_SOURCE, WINDOW_NAME,
+};
 use winit::Window;
 
 use gfx_hal::{
@@ -28,7 +31,7 @@ use gfx_hal::{
     device::Device,
     format::{Aspects, ChannelType, Format, Swizzle},
     image::{Extent, Layout, SubresourceRange, Usage, ViewKind},
-    memory::{Properties, Requirements},
+    memory::{Pod, Properties, Requirements},
     pass::{Attachment, AttachmentLoadOp, AttachmentOps, AttachmentStoreOp, Subpass, SubpassDesc},
     pool::{CommandPool, CommandPoolCreateFlags},
     pso::{
@@ -47,10 +50,64 @@ use gfx_hal::{
     Backend, DescriptorPool, Gpu, Graphics, IndexType, Instance, Primitive, QueueFamily, Surface,
 };
 
+use nalgebra_glm as glm;
 use std::time::Instant;
+
+/// DO NOT USE THE VERSION OF THIS FUNCTION THAT'S IN THE GFX-HAL CRATE.
+///
+/// It can trigger UB if you upcast from a low alignment to a higher alignment
+/// type. You'll be sad.
+pub fn cast_slice<T: Pod, U: Pod>(ts: &[T]) -> Option<&[U]> {
+    use core::mem::align_of;
+    // Handle ZST (this all const folds)
+    if size_of::<T>() == 0 || size_of::<U>() == 0 {
+        if size_of::<T>() == size_of::<U>() {
+            unsafe {
+                return Some(core::slice::from_raw_parts(
+                    ts.as_ptr() as *const U,
+                    ts.len(),
+                ));
+            }
+        } else {
+            return None;
+        }
+    }
+    // Handle alignments (this const folds)
+    if align_of::<U>() > align_of::<T>() {
+        // possible mis-alignment at the new type (this is a real runtime check)
+        if (ts.as_ptr() as usize) % align_of::<U>() != 0 {
+            return None;
+        }
+    }
+    if size_of::<T>() == size_of::<U>() {
+        // same size, so we direct cast, keeping the old length
+        unsafe {
+            Some(core::slice::from_raw_parts(
+                ts.as_ptr() as *const U,
+                ts.len(),
+            ))
+        }
+    } else {
+        // we might have slop, which would cause us to fail
+        let byte_size = size_of::<T>() * ts.len();
+        let (new_count, new_overflow) = (byte_size / size_of::<U>(), byte_size % size_of::<U>());
+        if new_overflow > 0 {
+            None
+        } else {
+            unsafe {
+                Some(core::slice::from_raw_parts(
+                    ts.as_ptr() as *const U,
+                    new_count,
+                ))
+            }
+        }
+    }
+}
 
 pub struct HalState {
     creation_instant: Instant,
+    cube_indexes: BufferBundle<back::Backend, back::Device>,
+    cube_vertices: BufferBundle<back::Backend, back::Device>,
     current_frame: usize,
     frames_in_flight: usize,
     in_flight_fences: Vec<<back::Backend as Backend>::Fence>,
@@ -65,8 +122,6 @@ pub struct HalState {
     swapchain: ManuallyDrop<<back::Backend as Backend>::Swapchain>,
     device: ManuallyDrop<back::Device>,
     queue_group: QueueGroup<back::Backend, Graphics>,
-    vertices: BufferBundle<back::Backend, back::Device>,
-    indices: BufferBundle<back::Backend, back::Device>,
     texture: LoadedImage<back::Backend, back::Device>,
     descriptor_set_layouts: Vec<<back::Backend as Backend>::DescriptorSetLayout>,
     descriptor_set: ManuallyDrop<<back::Backend as Backend>::DescriptorSet>,
@@ -79,6 +134,7 @@ pub struct HalState {
 }
 
 impl HalState {
+    //region new
     pub fn new(window: &Window) -> Result<Self, &'static str> {
         let instance = back::Instance::create(WINDOW_NAME, 1);
         let mut surface: <back::Backend as Backend>::Surface = instance.create_surface(window);
@@ -208,7 +264,7 @@ impl HalState {
             let image_usage = if caps.usage.contains(Usage::COLOR_ATTACHMENT) {
                 Usage::COLOR_ATTACHMENT
             } else {
-                Err("The surface isn't capable of surporting color")?
+                return Err("The surface isn't capable of surporting color");
             };
 
             // build the swapchain config from the stuff we chose from
@@ -351,24 +407,36 @@ impl HalState {
             graphics_pipeline,
         ) = Self::create_pipeline(&mut device, extent, &render_pass)?;
 
-        const F32_XY_RGB_UV_QUAD: usize = size_of::<f32>() * (2 + 3 + 2) * 4;
-        let vertices =
-            BufferBundle::new(&adapter, &device, F32_XY_RGB_UV_QUAD, BufferUsage::VERTEX)?;
-
-        const U16_QUAD_INDICES: usize = size_of::<f32>() * 2 * 3;
-        let indices = BufferBundle::new(&adapter, &device, U16_QUAD_INDICES, BufferUsage::INDEX)?;
-
-        // Write index data once
+        let cube_vertices = BufferBundle::new(
+            &adapter,
+            &device,
+            size_of_val(&CUBE_VERTEXES),
+            BufferUsage::VERTEX,
+        )?;
         unsafe {
             let mut data_target = device
-                .acquire_mapping_writer(&indices.memory, 0..indices.requirements.size)
-                .map_err(|_| "Failed to acquire an index buffer mapping writer")?;
-
-            const INDEX_DATA: &[u16] = &[0, 1, 2, 2, 3, 0];
-            data_target[..INDEX_DATA.len()].copy_from_slice(&INDEX_DATA);
+                .acquire_mapping_writer(&cube_vertices.memory, 0..cube_vertices.requirements.size)
+                .map_err(|_| "Failed to acquire a vertex buffer mapping writer")?;
+            data_target[..CUBE_VERTEXES.len()].copy_from_slice(&CUBE_VERTEXES);
             device
                 .release_mapping_writer(data_target)
-                .map_err(|_| "Couldn't release the index buffer mapping writer")?;
+                .map_err(|_| "Failed to release vertex buffer mapping writer")?;
+        }
+
+        let cube_indexes = BufferBundle::new(
+            &adapter,
+            &device,
+            size_of_val(&CUBE_INDEXES),
+            BufferUsage::INDEX,
+        )?;
+        unsafe {
+            let mut data_target = device
+                .acquire_mapping_writer(&cube_indexes.memory, 0..cube_indexes.requirements.size)
+                .map_err(|_| "Failed to acquire a index buffer mapping writer")?;
+            data_target[..CUBE_INDEXES.len()].copy_from_slice(&CUBE_INDEXES);
+            device
+                .release_mapping_writer(data_target)
+                .map_err(|_| "Failed to release index buffer mapping writer")?;
         }
 
         let texture = LoadedImage::new(
@@ -425,12 +493,13 @@ impl HalState {
             descriptor_pool: ManuallyDrop::new(descriptor_pool),
             pipeline_layout: ManuallyDrop::new(pipeline_layout),
             graphics_pipeline: ManuallyDrop::new(graphics_pipeline),
-            vertices,
-            indices,
+            cube_vertices,
+            cube_indexes,
             texture,
         })
     }
-
+    //endregion
+    //region create_pipeline
     #[allow(clippy::type_complexity)]
     fn create_pipeline(
         device: &mut back::Device,
@@ -514,41 +583,16 @@ impl HalState {
 
             let vertex_buffers: Vec<VertexBufferDesc> = vec![VertexBufferDesc {
                 binding: 0,
-                stride: (size_of::<f32>() * (2 + 3 + 2)) as ElemStride,
+                stride: (size_of::<Vertex>()) as ElemStride,
                 rate: 0,
             }];
-            let position_attribute = AttributeDesc {
-                location: 0,
-                binding: 0,
-                element: Element {
-                    format: Format::Rg32Float,
-                    offset: 0,
-                },
-            };
-            let color_attribute = AttributeDesc {
-                location: 1,
-                binding: 0,
-                element: Element {
-                    format: Format::Rgb32Float,
-                    offset: (size_of::<f32>() * 2) as ElemOffset,
-                },
-            };
-            let uv_attribute = AttributeDesc {
-                location: 2,
-                binding: 0,
-                element: Element {
-                    format: Format::Rg32Float,
-                    offset: (size_of::<f32>() * 5) as ElemOffset,
-                },
-            };
 
-            let attributes: Vec<AttributeDesc> =
-                vec![position_attribute, color_attribute, uv_attribute];
+            let attributes: Vec<AttributeDesc> = Vertex::attributes();
 
             let rasterizer = Rasterizer {
                 depth_clamping: false,
                 polygon_mode: PolygonMode::Fill,
-                cull_face: Face::NONE,
+                cull_face: Face::BACK,
                 front_face: FrontFace::Clockwise,
                 depth_bias: None,
                 conservative: false,
@@ -636,7 +680,7 @@ impl HalState {
                     .map_err(|_| "Couldn't create descriptor set")?
             };
 
-            let push_constants = vec![(ShaderStageFlags::FRAGMENT, 0..2)];
+            let push_constants = vec![(ShaderStageFlags::VERTEX, 0..16)];
             let layout = unsafe {
                 device
                     .create_pipeline_layout(&descriptor_set_layouts, push_constants)
@@ -691,8 +735,13 @@ impl HalState {
             gfx_pipeline,
         ))
     }
-
-    pub fn draw_clear_frame(&mut self, color: [f32; 4]) -> Result<(), &'static str> {
+    //endregion
+    //region draw_cubes_frame
+    pub fn draw_cubes_frame(
+        &mut self,
+        models: &[glm::TMat4<f32>],
+        aspect_ratio: f32,
+    ) -> Result<(), &'static str> {
         let image_available = &self.image_available_semaphores[self.current_frame];
         let render_finished = &self.render_finished_semaphores[self.current_frame];
 
@@ -710,91 +759,28 @@ impl HalState {
         unsafe {
             self.device
                 .wait_for_fence(flight_fence, core::u64::MAX)
-                .map_err(|_| "Failed to wait on the fence")?;
+                .map_err(|_| "Failed to wait on fence")?;
             self.device
                 .reset_fence(flight_fence)
-                .map_err(|_| "Couldn't reset the fence")?;
+                .map_err(|_| "Failed to reset fence")?;
         }
+        let view = glm::look_at_lh(
+            &glm::make_vec3(&[0.0, 0.0, -5.0]),
+            &glm::make_vec3(&[0.0, 0.0, 0.0]),
+            &glm::make_vec3(&[0.0, 1.0, 0.0]).normalize(),
+        );
 
-        // Record Commands to put into command buffer
-        unsafe {
-            let buffer = &mut self.command_buffers[i_usize];
-            let clear_values = [ClearValue::Color(ClearColor::Float(color))];
-            buffer.begin(false);
-            buffer.begin_render_pass_inline(
-                &self.render_pass,
-                &self.framebuffers[i_usize],
-                self.render_area,
-                clear_values.iter(),
-            );
-            buffer.finish();
-        }
-
-        // submit commands and present frame
-        let command_buffers = &self.command_buffers[i_usize..=i_usize];
-        let wait_semaphores: ArrayVec<[_; 1]> =
-            [(image_available, PipelineStage::COLOR_ATTACHMENT_OUTPUT)].into();
-        let signal_semaphores: ArrayVec<[_; 1]> = [render_finished].into();
-        let present_wait_semaphores: ArrayVec<[_; 1]> = [render_finished].into();
-        let submission = Submission {
-            command_buffers,
-            wait_semaphores,
-            signal_semaphores,
+        let projection = {
+            let mut temp = glm::perspective_lh_zo(aspect_ratio, f32::to_radians(50.0), 0.1, 100.0);
+            temp[(1, 1)] *= -1.0;
+            temp
         };
 
-        let the_command_queue = &mut self.queue_group.queues[0];
-        unsafe {
-            the_command_queue.submit(submission, Some(flight_fence));
-            self.swapchain
-                .present(the_command_queue, i_u32, present_wait_semaphores)
-                .map_err(|_| "Failed to present into the swapchain!")
-        }
-    }
-
-    pub fn draw_quad_frame(&mut self, quad: Quad, aspect_ratio: f64) -> Result<(), &'static str> {
-        let image_available = &self.image_available_semaphores[self.current_frame];
-        let render_finished = &self.render_finished_semaphores[self.current_frame];
-
-        self.current_frame = (self.current_frame + 1) % self.frames_in_flight;
-
-        let (i_u32, i_usize) = unsafe {
-            let image_index = self
-                .swapchain
-                .acquire_image(core::u64::MAX, FrameSync::Semaphore(image_available))
-                .map_err(|_| "Couldn't acquire an image from the swapchain")?;
-            (image_index, image_index as usize)
-        };
-
-        let flight_fence = &self.in_flight_fences[i_usize];
-        unsafe {
-            self.device
-                .wait_for_fence(flight_fence, core::u64::MAX)
-                .map_err(|_| "Failed to wait on the fence")?;
-            self.device
-                .reset_fence(flight_fence)
-                .map_err(|_| "Couldn't reset the fence")?;
-        }
-
-        unsafe {
-            let mut data_target = self
-                .device
-                .acquire_mapping_writer(&self.vertices.memory, 0..self.vertices.requirements.size)
-                .map_err(|_| "Failed to acquire mapping writer")?;
-            let data = quad.vertex_attributes();
-            data_target[..data.len()].copy_from_slice(&data);
-            self.device
-                .release_mapping_writer(data_target)
-                .map_err(|_| "Failed to release mapping writer")?;
-        }
-
-        let duration = Instant::now().duration_since(self.creation_instant);
-        let time_f32 = duration.as_secs() as f32 + duration.subsec_nanos() as f32 * 1e-9;
-
-        // Record Commands to put into command buffer
+        let vp = projection * view;
         unsafe {
             let buffer = &mut self.command_buffers[i_usize];
             const QUAD_CLEAR: [ClearValue; 1] =
-                [ClearValue::Color(ClearColor::Float([0.3, 0.3, 0.3, 0.8]))];
+                [ClearValue::Color(ClearColor::Float([0.1, 0.2, 0.3, 1.0]))];
             buffer.begin(false);
             {
                 let mut encoder = buffer.begin_render_pass_inline(
@@ -804,10 +790,9 @@ impl HalState {
                     QUAD_CLEAR.iter(),
                 );
                 encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-                let vertex_buffers: ArrayVec<[_; 1]> = [(self.vertices.buffer.deref(), 0)].into();
-                encoder.bind_vertex_buffers(0, vertex_buffers);
+                encoder.bind_vertex_buffers(0, Some((self.cube_vertices.buffer.deref(), 0)));
                 encoder.bind_index_buffer(IndexBufferView {
-                    buffer: &self.indices.buffer,
+                    buffer: &self.cube_indexes.buffer,
                     offset: 0,
                     index_type: IndexType::U16,
                 });
@@ -817,18 +802,20 @@ impl HalState {
                     Some(self.descriptor_set.deref()),
                     &[],
                 );
-                encoder.push_graphics_constants(
-                    &self.pipeline_layout,
-                    ShaderStageFlags::FRAGMENT,
-                    0,
-                    &[time_f32.to_bits(), (aspect_ratio as f32).to_bits()],
-                );
-                encoder.draw_indexed(0..6, 0, 0..1);
+                for model in models.iter() {
+                    let mvp = vp * model;
+                    encoder.push_graphics_constants(
+                        &self.pipeline_layout,
+                        ShaderStageFlags::VERTEX,
+                        0,
+                        cast_slice::<f32, u32>(&mvp.data)
+                            .expect("this cast never fails for same-aligned same-size data"),
+                    );
+                    encoder.draw_indexed(0..36, 0, 0..1);
+                }
             }
             buffer.finish();
         }
-
-        // submit commands and present frame
         let command_buffers = &self.command_buffers[i_usize..=i_usize];
         let wait_semaphores: ArrayVec<[_; 1]> =
             [(image_available, PipelineStage::COLOR_ATTACHMENT_OUTPUT)].into();
@@ -839,15 +826,15 @@ impl HalState {
             wait_semaphores,
             signal_semaphores,
         };
-
         let the_command_queue = &mut self.queue_group.queues[0];
         unsafe {
             the_command_queue.submit(submission, Some(flight_fence));
             self.swapchain
                 .present(the_command_queue, i_u32, present_wait_semaphores)
-                .map_err(|_| "Failed to present into the swapchain!")
+                .map_err(|_| "Failed to present into the swapchain")
         }
     }
+    //endregion
 }
 
 impl core::ops::Drop for HalState {
@@ -875,8 +862,8 @@ impl core::ops::Drop for HalState {
             }
 
             // pretty memory unsafe
-            self.vertices.manually_drop(self.device.deref());
-            self.indices.manually_drop(self.device.deref());
+            self.cube_vertices.manually_drop(self.device.deref());
+            self.cube_indexes.manually_drop(self.device.deref());
             self.texture.manually_drop(self.device.deref());
             use core::ptr::read;
             self.device
