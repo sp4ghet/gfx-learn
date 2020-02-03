@@ -66,6 +66,11 @@ impl LocalState {
         self.camera.update_orientation(d_pitch, d_yaw);
         self.camera
             .update_position(&inputs.keys_held, 5.0 * inputs.seconds);
+        self.is_orthographic = if inputs.swap_projection {
+            !self.is_orthographic
+        } else {
+            self.is_orthographic
+        };
     }
 }
 
