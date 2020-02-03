@@ -739,6 +739,7 @@ impl HalState {
     //region draw_cubes_frame
     pub fn draw_cubes_frame(
         &mut self,
+        view_projection: &glm::TMat4<f32>,
         models: &[glm::TMat4<f32>],
         aspect_ratio: f32,
     ) -> Result<(), &'static str> {
@@ -764,19 +765,7 @@ impl HalState {
                 .reset_fence(flight_fence)
                 .map_err(|_| "Failed to reset fence")?;
         }
-        let view = glm::look_at_lh(
-            &glm::make_vec3(&[0.0, 0.0, -5.0]),
-            &glm::make_vec3(&[0.0, 0.0, 0.0]),
-            &glm::make_vec3(&[0.0, 1.0, 0.0]).normalize(),
-        );
 
-        let projection = {
-            let mut temp = glm::perspective_lh_zo(aspect_ratio, f32::to_radians(50.0), 0.1, 100.0);
-            temp[(1, 1)] *= -1.0;
-            temp
-        };
-
-        let vp = projection * view;
         unsafe {
             let buffer = &mut self.command_buffers[i_usize];
             const QUAD_CLEAR: [ClearValue; 1] =
@@ -803,7 +792,7 @@ impl HalState {
                     &[],
                 );
                 for model in models.iter() {
-                    let mvp = vp * model;
+                    let mvp = view_projection * model;
                     encoder.push_graphics_constants(
                         &self.pipeline_layout,
                         ShaderStageFlags::VERTEX,

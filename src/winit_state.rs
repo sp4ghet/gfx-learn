@@ -1,11 +1,13 @@
-use winit::{dpi::LogicalSize, CreationError, EventsLoop, Window, WindowBuilder};
-
 use crate::WINDOW_NAME;
+use std::collections::HashSet;
+use winit::{dpi::LogicalSize, CreationError, EventsLoop, VirtualKeyCode, Window, WindowBuilder};
 
 #[derive(Debug)]
 pub struct WinitState {
     pub events_loop: EventsLoop,
     pub window: Window,
+    pub grabbed: bool,
+    pub keys_held: HashSet<VirtualKeyCode>,
 }
 
 impl WinitState {
@@ -19,6 +21,8 @@ impl WinitState {
         output.map(|window| Self {
             events_loop,
             window,
+            grabbed: false,
+            keys_held: HashSet::new(),
         })
     }
 }

@@ -9,7 +9,7 @@ use log::{debug, error, info, trace, warn};
 use hal_state::HalState;
 use nalgebra_glm as glm;
 use std::time::Instant;
-use user_input::UserInput;
+use user_input::{EulerFPSCamera, UserInput};
 use winit_state::WinitState;
 
 pub const WINDOW_NAME: &str = "Hello Vulkan";
@@ -17,13 +17,17 @@ pub const VERTEX_SOURCE: &str = include_str!("./tri.vert");
 pub const FRAGMENT_SOURCE: &str = include_str!("./tri.frag");
 pub static CREATURE_BYTES: &[u8] = include_bytes!("./icon.jpg");
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct LocalState {
     pub frame_width: f64,
     pub frame_height: f64,
     pub mouse_x: f64,
     pub mouse_y: f64,
     pub cubes: Vec<glm::TMat4<f32>>,
+    pub camera: EulerFPSCamera,
+    pub perspective_projection: glm::TMat4<f32>,
+    pub orthographic_projection: glm::TMat4<f32>,
+    pub is_orthographic: bool,
     pub spare_time: f32,
 }
 
@@ -55,12 +59,25 @@ impl LocalState {
             }
             self.spare_time -= ONE_SIXTIETH;
         }
+
+        const MOUSE_SENSITIVITY: f32 = 0.05;
+        let d_pitch = -inputs.orientation_change.1 * MOUSE_SENSITIVITY;
+        let d_yaw = -inputs.orientation_change.0 * MOUSE_SENSITIVITY;
+        self.camera.update_orientation(d_pitch, d_yaw);
+        self.camera
+            .update_position(&inputs.keys_held, 5.0 * inputs.seconds);
     }
 }
 
 pub fn do_the_render(hal: &mut HalState, locals: &LocalState) -> Result<(), &'static str> {
     let aspect_ratio = locals.frame_width / locals.frame_height;
-    hal.draw_cubes_frame(&locals.cubes, aspect_ratio as f32)
+    let projection = if locals.is_orthographic {
+        locals.orthographic_projection
+    } else {
+        locals.perspective_projection
+    };
+    let view_projection = projection * locals.camera.make_view_matrix();
+    hal.draw_cubes_frame(&view_projection, &locals.cubes, aspect_ratio as f32)
 }
 
 fn main() {
@@ -88,12 +105,24 @@ fn main() {
             glm::translate(&glm::identity(), &glm::make_vec3(&[-3.4, -2.3, 1.0])),
             glm::translate(&glm::identity(), &glm::make_vec3(&[-2.8, -0.7, 5.0])),
         ],
+        camera: EulerFPSCamera::at_position(glm::make_vec3(&[0.0, 0.0, -5.0])),
+        orthographic_projection: {
+            let mut temp = glm::ortho_lh_zo(-5.0, 5.0, -5.0, 5.0, 0.1, 100.0);
+            temp[(1, 1)] *= -1.0;
+            temp
+        },
+        perspective_projection: {
+            let mut temp = glm::perspective_lh_zo(4.0 / 3.0, f32::to_radians(50.0), 0.1, 100.0);
+            temp[(1, 1)] *= -1.0;
+            temp
+        },
+        is_orthographic: false,
     };
 
     let mut last_timestamp = Instant::now();
 
     loop {
-        let inputs = UserInput::poll_events(&mut winit_state.events_loop, &mut last_timestamp);
+        let inputs = UserInput::poll_events(&mut winit_state, &mut last_timestamp);
         if inputs.end_requested {
             break;
         }
